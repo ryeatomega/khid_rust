@@ -2,6 +2,7 @@ use anyhow::{Ok, Result};
 use futures_util::StreamExt;
 use scraper::Selector;
 use tokio::io::{AsyncWriteExt, BufWriter};
+use urlencoding::decode;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -46,24 +47,23 @@ async fn down_page_scrape(downlist: Vec<String>, client: &reqwest::Client) -> Re
     Ok(a)
 }
 async fn download_tracks(downlist: Vec<String>, client: &reqwest::Client) -> Result<()> {
-    println!("{:#?}", downlist);
-    let mut i = 0;
     for track in downlist {
-        let name = format!("./file{0}", i);
-        let inner = tokio::fs::OpenOptions::new()
+        let name = decode(track.split("/").last().unwrap())
+            .unwrap()
+            .into_owned();
+        let inner: tokio::fs::File = tokio::fs::OpenOptions::new()
             .create(true)
             .write(true)
             .open(&name)
             .await
             .unwrap();
-        let mut writer = BufWriter::new(inner);
-        let file = client.get(track).send().await?;
+        let mut writer: BufWriter<tokio::fs::File> = BufWriter::new(inner);
+        let file: reqwest::Response = client.get(&track).send().await?;
         let mut file_stream = file.bytes_stream();
         while let Some(a) = file_stream.next().await {
             writer.write_all(&a.unwrap()).await?;
         }
         println!("file downloaded. {0}", name);
-        i += 1;
     }
     Ok(())
 }
