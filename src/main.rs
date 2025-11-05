@@ -12,7 +12,6 @@ async fn main() -> Result<()> {
     download_tracks(b, &client).await?;
     Ok(())
 }
-
 async fn init_page_scrape(link: &'static str, client: &reqwest::Client) -> Result<Vec<String>> {
     let mut a: Vec<String> = Vec::new();
     let res: reqwest::Response = client.get(link).send().await.unwrap();
