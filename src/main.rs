@@ -1,13 +1,13 @@
 use anyhow::{Ok, Result};
 use futures_util::StreamExt;
 use scraper::Selector;
-use tokio::io::{AsyncWriteExt, BufWriter};
+use tokio::io::{self, AsyncBufReadExt, AsyncWriteExt, BufWriter};
 use urlencoding::decode;
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let client: reqwest::Client = reqwest::Client::new();
-    let a: Vec<String> = init_page_scrape("https://downloads.khinsider.com/game-soundtracks/album/risk-of-rain-2-survivors-of-the-void-2022", &client).await?;
+    let a: Vec<String> = init_page_scrape("https://downloads.khinsider.com/game-soundtracks/album/cyberpunk-2077-phantom-liberty-original-score-deluxe-edition-2023", &client).await?;
     let b: Vec<String> = down_page_scrape(a, &client).await?;
     download_tracks(b, &client).await?;
     Ok(())
@@ -46,10 +46,26 @@ async fn down_page_scrape(downlist: Vec<String>, client: &reqwest::Client) -> Re
     Ok(a)
 }
 async fn download_tracks(downlist: Vec<String>, client: &reqwest::Client) -> Result<()> {
-    for track in downlist {
+    'outer: for track in downlist {
         let name = decode(track.split("/").last().unwrap())
             .unwrap()
             .into_owned();
+
+        println!("Download {name} y/n/q?");
+        let mut user_string = String::new();
+        loop {
+            user_string.clear();
+            let mut stdin = io::BufReader::new(io::stdin());
+            stdin.read_line(&mut user_string).await?;
+            match user_string.trim().to_lowercase().as_str() {
+                "y" => break,
+                "n" => continue 'outer,
+                "q" => return Ok(()),
+                _ => {
+                    println!("oi, you didn't enter a proper option, try again.")
+                }
+            }
+        }
         let inner: tokio::fs::File = tokio::fs::OpenOptions::new()
             .create(true)
             .write(true)
