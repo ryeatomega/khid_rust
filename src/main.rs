@@ -1,6 +1,6 @@
-use anyhow::{Ok, Result};
-use futures_util::StreamExt;
-use scraper::Selector;
+use anyhow::{Context, Ok, Result};
+use futures_util::{StreamExt, future::join_all};
+use scraper::{Html, Selector};
 use tokio::io::{self, AsyncBufReadExt, AsyncWriteExt, BufWriter};
 use urlencoding::decode;
 
@@ -12,40 +12,64 @@ async fn main() -> Result<()> {
     download_tracks(b, &client).await?;
     Ok(())
 }
-async fn init_page_scrape(link: &'static str, client: &reqwest::Client) -> Result<Vec<String>> {
-    let mut a: Vec<String> = Vec::new();
-    let res: reqwest::Response = client.get(link).send().await.unwrap();
-    println!("Status: {}", res.status());
-    let html: String = res.text().await?;
-    println!("Parsing...");
-    let parsed: scraper::Html = scraper::Html::parse_document(&html);
-    let selector: Selector = Selector::parse(r#"td.playlistDownloadSong a[href*=".mp3"]"#).unwrap();
-    for element in parsed.select(&selector) {
-        a.push(
-            "https://downloads.khinsider.com/".to_string()
-                + &element.value().attr("href").unwrap().to_string(),
-        );
+
+async fn fetch_html(link: &str, client: &reqwest::Client) -> Result<Html> {
+    println!("Fetching {link}");
+    let res: reqwest::Response = client
+        .get(link)
+        .send()
+        .await
+        .context("[ERROR] GET request failed.")?;
+    let status = res.status();
+    if status == 200 {
+        let html = res
+            .text()
+            .await
+            .context("[ERROR] Failed to get HTML data.")?;
+        let parsed = scraper::Html::parse_document(&html);
+        Ok(parsed)
+    } else {
+        eprintln!("HTTP {status} failed to fetch.");
+        std::process::exit(1);
     }
+}
+async fn init_page_scrape(link: &str, client: &reqwest::Client) -> Result<Vec<String>> {
+    println!("(Stage 1) Getting the album page.");
+    let parsed = fetch_html(link, client).await?;
+    let selector: Selector = Selector::parse(r#"td.playlistDownloadSong a[href*=".mp3"]"#).unwrap();
+    let a = parsed
+        .select(&selector)
+        .filter_map(|x| {
+            x.value()
+                .attr("href")
+                .map(|x| format!("https://downloads.khinsider.com/{x}"))
+        })
+        .collect();
     Ok(a)
 }
 async fn down_page_scrape(downlist: Vec<String>, client: &reqwest::Client) -> Result<Vec<String>> {
-    let mut a: Vec<String> = Vec::new();
-    for link in downlist {
-        let res: reqwest::Response = client.get(link).send().await?;
-        let html: String = res.text().await?;
-        let parsed: scraper::Html = scraper::Html::parse_document(&html);
-        let selector: Selector = Selector::parse(r#"a:has(span.songDownloadLink)"#).unwrap();
-        for element in parsed.select(&selector) {
-            if let Some(href) = element.value().attr("href") {
-                if href.ends_with(".flac") {
-                    a.push(href.to_string());
-                }
-            }
-        }
-    }
+    println!("(Stage 2) Getting the audio file links.");
+    let b: Vec<Html> = join_all(downlist.iter().map(|link| fetch_html(&link, client)))
+        .await
+        .iter()
+        .map(|result| result.as_ref().unwrap())
+        .cloned()
+        .collect();
+    let selector: Selector = Selector::parse(r#"a:has(span.songDownloadLink)"#).unwrap();
+    let a = b
+        .iter()
+        .map(|x: &Html| {
+            x.select(&selector)
+                .filter_map(|x: scraper::ElementRef<'_>| x.value().attr("href"))
+                .filter(|x: &&str| x.ends_with(".flac"))
+                .map(|x| x.to_string())
+                .collect()
+        })
+        .collect();
     Ok(a)
 }
 async fn download_tracks(downlist: Vec<String>, client: &reqwest::Client) -> Result<()> {
+    println!("Stage 3 : Downloading files.");
     'outer: for track in downlist {
         let name = decode(track.split("/").last().unwrap())
             .unwrap()
