@@ -19,7 +19,7 @@ async fn init_page_scrape(link: &'static str, client: &reqwest::Client) -> Resul
     let html: String = res.text().await?;
     println!("Parsing...");
     let parsed: scraper::Html = scraper::Html::parse_document(&html);
-    let selector: Selector = Selector::parse("td.playlistDownloadSong a[href]").unwrap();
+    let selector: Selector = Selector::parse(r#"td.playlistDownloadSong a[href*=".mp3"]"#).unwrap();
     for element in parsed.select(&selector) {
         a.push(
             "https://downloads.khinsider.com/".to_string()
@@ -34,7 +34,7 @@ async fn down_page_scrape(downlist: Vec<String>, client: &reqwest::Client) -> Re
         let res: reqwest::Response = client.get(link).send().await?;
         let html: String = res.text().await?;
         let parsed: scraper::Html = scraper::Html::parse_document(&html);
-        let selector: Selector = Selector::parse("a[href]").unwrap();
+        let selector: Selector = Selector::parse(r#"a:has(span.songDownloadLink)"#).unwrap();
         for element in parsed.select(&selector) {
             if let Some(href) = element.value().attr("href") {
                 if href.ends_with(".flac") {
