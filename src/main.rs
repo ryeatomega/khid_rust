@@ -1,43 +1,50 @@
 use anyhow::{Context, Ok, Result};
 use futures_util::{StreamExt, future::join_all};
 use scraper::{Html, Selector};
+use std::env;
 use tokio::io::{self, AsyncBufReadExt, AsyncWriteExt, BufWriter};
 use urlencoding::decode;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let client: reqwest::Client = reqwest::Client::new();
-    let a: Vec<String> = init_page_scrape("https://downloads.khinsider.com/game-soundtracks/album/cyberpunk-2077-phantom-liberty-original-score-deluxe-edition-2023", &client).await?;
-    let b: Vec<String> = down_page_scrape(a, &client).await?;
-    download_tracks(b, &client).await?;
-    Ok(())
+    let args: Vec<String> = env::args().collect();
+    let reqwest_client: reqwest::Client = reqwest::Client::new();
+    if args.len() < 2 {
+        println!("[ERROR] No link provided.");
+        println!("[USAGE] khid_rust.exe <link>.");
+        Ok(())
+    } else {
+        let init_p_links: Vec<String> = init_page_scrape(&args[2], &reqwest_client).await?;
+        let down_p_links: Vec<String> = down_page_scrape(init_p_links, &reqwest_client).await?;
+        download_tracks(down_p_links, &reqwest_client).await?;
+        Ok(())
+    }
 }
 
 async fn fetch_html(link: &str, client: &reqwest::Client) -> Result<Html> {
-    println!("Fetching {link}");
-    let res: reqwest::Response = client
+    let response: reqwest::Response = client
         .get(link)
         .send()
         .await
         .context("[ERROR] GET request failed.")?;
-    let status = res.status();
-    if status == 200 {
-        let html = res
+    let status_code = response.status();
+    if status_code == 200 {
+        let html = response
             .text()
             .await
             .context("[ERROR] Failed to get HTML data.")?;
-        let parsed = scraper::Html::parse_document(&html);
-        Ok(parsed)
+        let parsed_html = scraper::Html::parse_document(&html);
+        Ok(parsed_html)
     } else {
-        eprintln!("HTTP {status} failed to fetch.");
+        eprintln!("[ERROR] HTTP {status_code} failed to fetch.");
         std::process::exit(1);
     }
 }
 async fn init_page_scrape(link: &str, client: &reqwest::Client) -> Result<Vec<String>> {
-    println!("(Stage 1) Getting the album page.");
-    let parsed = fetch_html(link, client).await?;
+    println!("[Stage 1] Getting the album page.");
+    let parsed_html = fetch_html(link, client).await?;
     let selector: Selector = Selector::parse(r#"td.playlistDownloadSong a[href*=".mp3"]"#).unwrap();
-    let a = parsed
+    let links = parsed_html
         .select(&selector)
         .filter_map(|x| {
             x.value()
@@ -45,18 +52,18 @@ async fn init_page_scrape(link: &str, client: &reqwest::Client) -> Result<Vec<St
                 .map(|x| format!("https://downloads.khinsider.com/{x}"))
         })
         .collect();
-    Ok(a)
+    Ok(links)
 }
 async fn down_page_scrape(downlist: Vec<String>, client: &reqwest::Client) -> Result<Vec<String>> {
-    println!("(Stage 2) Getting the audio file links.");
-    let b: Vec<Html> = join_all(downlist.iter().map(|link| fetch_html(&link, client)))
+    println!("[Stage 2] Getting the audio file links.");
+    let html_list: Vec<Html> = join_all(downlist.iter().map(|link| fetch_html(&link, client)))
         .await
         .iter()
         .map(|result| result.as_ref().unwrap())
         .cloned()
         .collect();
     let selector: Selector = Selector::parse(r#"a:has(span.songDownloadLink)"#).unwrap();
-    let a = b
+    let links = html_list
         .iter()
         .map(|x: &Html| {
             x.select(&selector)
@@ -66,43 +73,45 @@ async fn down_page_scrape(downlist: Vec<String>, client: &reqwest::Client) -> Re
                 .collect()
         })
         .collect();
-    Ok(a)
+    Ok(links)
 }
-async fn download_tracks(downlist: Vec<String>, client: &reqwest::Client) -> Result<()> {
-    println!("Stage 3 : Downloading files.");
-    'outer: for track in downlist {
-        let name = decode(track.split("/").last().unwrap())
+async fn download_tracks(links: Vec<String>, client: &reqwest::Client) -> Result<()> {
+    println!("[Stage 3] Downloading files.");
+    let mut stdin_handle = io::BufReader::new(io::stdin());
+    'outer: for link in links {
+        let track_name = decode(link.split("/").last().unwrap())
             .unwrap()
             .into_owned();
+        println!("[DOWNLOAD] \"{track_name}\" [y/n/q]?");
+        let mut user_input_buffer = String::new();
 
-        println!("Download {name} y/n/q?");
-        let mut user_string = String::new();
         loop {
-            user_string.clear();
-            let mut stdin = io::BufReader::new(io::stdin());
-            stdin.read_line(&mut user_string).await?;
-            match user_string.trim().to_lowercase().as_str() {
+            user_input_buffer.clear();
+            stdin_handle.read_line(&mut user_input_buffer).await?;
+            match user_input_buffer.trim().to_lowercase().as_str() {
                 "y" => break,
                 "n" => continue 'outer,
                 "q" => return Ok(()),
                 _ => {
-                    println!("oi, you didn't enter a proper option, try again.")
+                    println!("[ERROR] You didn't enter a proper option! Try again.")
                 }
             }
         }
-        let inner: tokio::fs::File = tokio::fs::OpenOptions::new()
+
+        let tokio_openoptions: tokio::fs::File = tokio::fs::OpenOptions::new()
             .create(true)
             .write(true)
-            .open(&name)
+            .open(&track_name)
             .await
             .unwrap();
-        let mut writer: BufWriter<tokio::fs::File> = BufWriter::new(inner);
-        let file: reqwest::Response = client.get(&track).send().await?;
-        let mut file_stream = file.bytes_stream();
+        let mut buf_writer: BufWriter<tokio::fs::File> = BufWriter::new(tokio_openoptions);
+        let target_file: reqwest::Response = client.get(&link).send().await?;
+        let mut file_stream = target_file.bytes_stream();
+
         while let Some(a) = file_stream.next().await {
-            writer.write_all(&a.unwrap()).await?;
+            buf_writer.write_all(&a.unwrap()).await?;
         }
-        println!("file downloaded. {0}", name);
+        println!("[INFO] File {0} downloaded successfully.", track_name);
     }
     Ok(())
 }
