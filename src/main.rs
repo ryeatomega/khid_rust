@@ -15,7 +15,7 @@ async fn main() -> Result<(), anyhow::Error> {
     } else {
         let reqwest_client: reqwest::Client = reqwest::Client::new();
         let init_p_links: Result<Vec<String>, anyhow::Error> =
-            init_page_scrape(&args[1], &reqwest_client)
+            init_page_scrape("https://downloads.khinsider.com/game-soundtracks/album/cyberpunk-2077-89.7-growl-fm-2023", &reqwest_client)
                 .await
                 .context("[ERROR] Failed to get track links.");
         let down_p_links: Result<Vec<String>, anyhow::Error> =
