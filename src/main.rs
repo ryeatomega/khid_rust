@@ -6,7 +6,7 @@ use tokio::io::{self, AsyncBufReadExt, AsyncWriteExt, BufWriter};
 use urlencoding::decode;
 
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn main() -> Result<(), anyhow::Error> {
     let args: Vec<String> = env::args().collect();
     let reqwest_client: reqwest::Client = reqwest::Client::new();
     if args.len() < 2 {
@@ -14,9 +14,17 @@ async fn main() -> Result<()> {
         println!("[USAGE] khid_rust.exe <link>.");
         Ok(())
     } else {
-        let init_p_links: Vec<String> = init_page_scrape(&args[2], &reqwest_client).await?;
-        let down_p_links: Vec<String> = down_page_scrape(init_p_links, &reqwest_client).await?;
-        download_tracks(down_p_links, &reqwest_client).await?;
+        let init_p_links: Result<Vec<String>, anyhow::Error> =
+            init_page_scrape(&args[2], &reqwest_client)
+                .await
+                .context("[ERROR] Failed to get track links.");
+        let down_p_links: Result<Vec<String>, anyhow::Error> =
+            down_page_scrape(init_p_links.unwrap(), &reqwest_client)
+                .await
+                .context("[ERROR] Failed to get download links");
+        let _ = download_tracks(down_p_links.unwrap(), &reqwest_client)
+            .await
+            .context("[ERROR] Failed to download the tracks.");
         Ok(())
     }
 }
@@ -43,13 +51,15 @@ async fn fetch_html(link: &str, client: &reqwest::Client) -> Result<Html> {
 async fn init_page_scrape(link: &str, client: &reqwest::Client) -> Result<Vec<String>> {
     println!("[Stage 1] Getting the album page.");
     let parsed_html = fetch_html(link, client).await?;
-    let selector: Selector = Selector::parse(r#"td.playlistDownloadSong a[href*=".mp3"]"#).unwrap();
+    let selector = Selector::parse(r#"td.playlistDownloadSong a[href*=".mp3"]"#)
+        .expect("[ERROR] Failed to create selector");
     let links = parsed_html
         .select(&selector)
-        .filter_map(|x| {
-            x.value()
+        .filter_map(|element| {
+            element
+                .value()
                 .attr("href")
-                .map(|x| format!("https://downloads.khinsider.com/{x}"))
+                .map(|href| format!("https://downloads.khinsider.com/{href}"))
         })
         .collect();
     Ok(links)
@@ -62,14 +72,15 @@ async fn down_page_scrape(downlist: Vec<String>, client: &reqwest::Client) -> Re
         .map(|result| result.as_ref().unwrap())
         .cloned()
         .collect();
-    let selector: Selector = Selector::parse(r#"a:has(span.songDownloadLink)"#).unwrap();
+    let selector: Selector = Selector::parse(r#"a:has(span.songDownloadLink)"#)
+        .expect("[ERROR] Failed to create selector.");
     let links = html_list
         .iter()
-        .map(|x: &Html| {
-            x.select(&selector)
-                .filter_map(|x: scraper::ElementRef<'_>| x.value().attr("href"))
-                .filter(|x: &&str| x.ends_with(".flac"))
-                .map(|x| x.to_string())
+        .map(|page: &Html| {
+            page.select(&selector)
+                .filter_map(|element: scraper::ElementRef<'_>| element.value().attr("href"))
+                .filter(|href: &&str| href.ends_with(".flac"))
+                .map(|href| href.to_string())
                 .collect()
         })
         .collect();
@@ -79,12 +90,13 @@ async fn download_tracks(links: Vec<String>, client: &reqwest::Client) -> Result
     println!("[Stage 3] Downloading files.");
     let mut stdin_handle = io::BufReader::new(io::stdin());
     'outer: for link in links {
-        let track_name = decode(link.split("/").last().unwrap())
-            .unwrap()
-            .into_owned();
+        let track_name = decode(link.split("/").last().expect(
+            "[ERROR] Failed to split the link, and get the last element (being the file name)",
+        ))
+        .expect("[ERROR] Failed to url decode the filename.")
+        .into_owned();
         println!("[DOWNLOAD] \"{track_name}\" [y/n/q]?");
         let mut user_input_buffer = String::new();
-
         loop {
             user_input_buffer.clear();
             stdin_handle.read_line(&mut user_input_buffer).await?;
@@ -93,7 +105,7 @@ async fn download_tracks(links: Vec<String>, client: &reqwest::Client) -> Result
                 "n" => continue 'outer,
                 "q" => return Ok(()),
                 _ => {
-                    println!("[ERROR] You didn't enter a proper option! Try again.")
+                    println!("[ERROR] Invalid option! Try again.")
                 }
             }
         }
@@ -103,13 +115,16 @@ async fn download_tracks(links: Vec<String>, client: &reqwest::Client) -> Result
             .write(true)
             .open(&track_name)
             .await
-            .unwrap();
+            .expect("[ERROR] Failed to create OpenOptions (for BufWriter settings).");
         let mut buf_writer: BufWriter<tokio::fs::File> = BufWriter::new(tokio_openoptions);
         let target_file: reqwest::Response = client.get(&link).send().await?;
         let mut file_stream = target_file.bytes_stream();
 
         while let Some(a) = file_stream.next().await {
-            buf_writer.write_all(&a.unwrap()).await?;
+            let _ = buf_writer
+                .write_all(&a.unwrap())
+                .await
+                .context("[ERROR] Failed to write stream chunk.");
         }
         println!("[INFO] File {0} downloaded successfully.", track_name);
     }
