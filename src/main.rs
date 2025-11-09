@@ -15,7 +15,7 @@ async fn main() -> Result<(), anyhow::Error> {
         Ok(())
     } else {
         let init_p_links: Result<Vec<String>, anyhow::Error> =
-            init_page_scrape(&args[2], &reqwest_client)
+            init_page_scrape(&args[1], &reqwest_client)
                 .await
                 .context("[ERROR] Failed to get track links.");
         let down_p_links: Result<Vec<String>, anyhow::Error> =
