@@ -40,8 +40,8 @@ async fn fetch_html(link: &str, client: &reqwest::Client) -> Result<Html> {
         let html = response
             .text()
             .await
-            .context("[ERROR] Failed to get HTML data.")?;
-        let parsed_html = scraper::Html::parse_document(&html);
+            .context("[ERROR] Failed to get HTML data.");
+        let parsed_html = scraper::Html::parse_document(&html.unwrap());
         Ok(parsed_html)
     } else {
         eprintln!("[ERROR] HTTP {status_code} failed to fetch.");
@@ -79,7 +79,7 @@ async fn down_page_scrape(downlist: Vec<String>, client: &reqwest::Client) -> Re
         .map(|page: &Html| {
             page.select(&selector)
                 .filter_map(|element: scraper::ElementRef<'_>| element.value().attr("href"))
-                .filter(|href: &&str| href.ends_with(".flac"))
+                .filter(|href: &&str| href.ends_with(".mp3"))
                 .map(|href| href.to_string())
                 .collect()
         })
