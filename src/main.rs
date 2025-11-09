@@ -8,12 +8,12 @@ use urlencoding::decode;
 #[tokio::main]
 async fn main() -> Result<(), anyhow::Error> {
     let args: Vec<String> = env::args().collect();
-    let reqwest_client: reqwest::Client = reqwest::Client::new();
     if args.len() < 2 {
         println!("[ERROR] No link provided.");
         println!("[USAGE] khid_rust.exe <link>.");
         Ok(())
     } else {
+        let reqwest_client: reqwest::Client = reqwest::Client::new();
         let init_p_links: Result<Vec<String>, anyhow::Error> =
             init_page_scrape(&args[1], &reqwest_client)
                 .await
